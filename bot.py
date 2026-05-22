@@ -12,11 +12,20 @@ import os
 
 load_dotenv()
 
+# ====================== ENV SAFE ======================
+
 TOKEN = os.getenv("BOT_TOKEN")
-YOUR_USER_ID = int(os.getenv("YOUR_USER_ID"))
+USER_ID_RAW = os.getenv("YOUR_USER_ID")
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не найден в environment variables")
+
+if not USER_ID_RAW:
+    raise ValueError("YOUR_USER_ID не найден в environment variables")
+
+YOUR_USER_ID = int(USER_ID_RAW)
+
+# ====================== BOT ======================
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -27,7 +36,6 @@ conn = sqlite3.connect("spy_bot.db", check_same_thread=False)
 
 def migrate_database():
     cur = conn.cursor()
-
     print("🔄 Проверка базы...")
 
     cur.execute("""
@@ -45,13 +53,11 @@ def migrate_database():
 
     conn.commit()
 
-# ВАЖНО: вызываем после определения функции
 migrate_database()
 
 # ====================== STATE ======================
 
 is_active = True
-blacklist = set()
 
 # ====================== CLEANUP ======================
 
@@ -60,11 +66,10 @@ def cleanup_old_messages():
         seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
         conn.execute("DELETE FROM messages WHERE time < ?", (seven_days_ago,))
         conn.commit()
-        logging.info("🧹 Очистка старых сообщений выполнена")
     except Exception as e:
         logging.error(f"Cleanup error: {e}")
 
-# ====================== SAVE MESSAGE ======================
+# ====================== SAVE ======================
 
 def save_message(message: types.Message):
     if not message.from_user:
@@ -142,7 +147,7 @@ async def start(message: types.Message):
     if message.from_user.id != YOUR_USER_ID:
         return
 
-    await message.answer("🕵️‍♂️ Spy Bot запущен и готов к работе!")
+    await message.answer("🕵️‍♂️ Spy Bot запущен")
 
 @dp.message(Command("cleanup"))
 async def cleanup_cmd(message: types.Message):
@@ -171,7 +176,7 @@ async def handle_deleted(deleted: types.BusinessMessagesDeleted):
 
         try:
             if media_type and file_id:
-                caption = f"🗑 Удалено\nОт: {user_name or 'unknown'}"
+                caption = f"🗑 Сообщение удалено\nОт: {user_name or 'unknown'}"
 
                 if media_type == "photo":
                     await bot.send_photo(YOUR_USER_ID, file_id, caption=caption)
@@ -184,32 +189,31 @@ async def handle_deleted(deleted: types.BusinessMessagesDeleted):
                     await bot.send_message(YOUR_USER_ID, caption)
                 elif media_type == "audio":
                     await bot.send_audio(YOUR_USER_ID, file_id, caption=caption)
-
                 else:
-                    text = f"""🗑 Сообщение удалено
+                    await bot.send_message(
+                        YOUR_USER_ID,
+                        f"""🗑 Сообщение удалено
 
 👤 От: {user_name or 'Неизвестно'}
 💬 Чат: {deleted.chat.id}
 🆔 ID: {msg_id}
 ⏰ {datetime.now().strftime("%d.%m %H:%M:%S")}
 
-❌ Было: {content or 'Пустое сообщение'}
-"""
-
-                    await bot.send_message(YOUR_USER_ID, text.strip())
+❌ Было: {content or 'Пустое сообщение'}"""
+                    )
 
             else:
-                text = f"""🗑 Сообщение удалено
+                await bot.send_message(
+                    YOUR_USER_ID,
+                    f"""🗑 Сообщение удалено
 
 👤 От: {user_name or 'Неизвестно'}
 💬 Чат: {deleted.chat.id}
 🆔 ID: {msg_id}
 ⏰ {datetime.now().strftime("%d.%m %H:%M:%S")}
 
-❌ Было: {content or 'Пустое сообщение'}
-"""
-
-                await bot.send_message(YOUR_USER_ID, text.strip())
+❌ Было: {content or 'Пустое сообщение'}"""
+                )
 
         except Exception as e:
             logging.error(e)
@@ -224,18 +228,18 @@ async def handle_edited(message: types.Message):
 
     await bot.send_message(
         YOUR_USER_ID,
-        f"""✏️ Edit
+        f"""✏️ Сообщение изменено
 
 👤 {message.from_user.full_name}
 💬 {message.chat.id}
 
-Before: {old_content}
-After: {new_content}"""
+Было: {old_content}
+Стало: {new_content}"""
     )
 
     save_message(message)
 
-# ====================== TASKS ======================
+# ====================== CLEANUP TASK ======================
 
 async def cleanup_task():
     while True:
