@@ -12,7 +12,7 @@ import os
 
 load_dotenv()
 
-# ====================== ENV SAFE ======================
+# ====================== ENV ======================
 
 TOKEN = os.getenv("BOT_TOKEN")
 USER_ID_RAW = os.getenv("YOUR_USER_ID")
@@ -23,7 +23,12 @@ if not TOKEN:
 if not USER_ID_RAW:
     raise ValueError("YOUR_USER_ID не найден в environment variables")
 
-YOUR_USER_ID = int(USER_ID_RAW)
+# ====================== ADMINS ======================
+
+ADMIN_IDS = {
+    int(USER_ID_RAW),     # первый админ из env
+    6532490493            # второй админ (которого ты дал)
+}
 
 # ====================== BOT ======================
 
@@ -142,16 +147,19 @@ def get_message(chat_id, message_id):
 
 # ====================== COMMANDS ======================
 
+def is_admin(user_id: int):
+    return user_id in ADMIN_IDS
+
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    if message.from_user.id != YOUR_USER_ID:
+    if message.from_user.id not in ADMIN_IDS:
         return
 
-    await message.answer("🕵️‍♂️ Spy Bot(1) запущен")
+    await message.answer("🕵️‍♂️ Spy Bot запущен (2 админа активны)")
 
 @dp.message(Command("cleanup"))
 async def cleanup_cmd(message: types.Message):
-    if message.from_user.id != YOUR_USER_ID:
+    if message.from_user.id not in ADMIN_IDS:
         return
 
     cleanup_old_messages()
@@ -179,19 +187,19 @@ async def handle_deleted(deleted: types.BusinessMessagesDeleted):
                 caption = f"🗑 Сообщение удалено\nОт: {user_name or 'unknown'}"
 
                 if media_type == "photo":
-                    await bot.send_photo(YOUR_USER_ID, file_id, caption=caption)
+                    await bot.send_photo(list(ADMIN_IDS)[0], file_id, caption=caption)
                 elif media_type == "video":
-                    await bot.send_video(YOUR_USER_ID, file_id, caption=caption)
+                    await bot.send_video(list(ADMIN_IDS)[0], file_id, caption=caption)
                 elif media_type == "document":
-                    await bot.send_document(YOUR_USER_ID, file_id, caption=caption)
+                    await bot.send_document(list(ADMIN_IDS)[0], file_id, caption=caption)
                 elif media_type == "voice":
-                    await bot.send_voice(YOUR_USER_ID, file_id)
-                    await bot.send_message(YOUR_USER_ID, caption)
+                    await bot.send_voice(list(ADMIN_IDS)[0], file_id)
+                    await bot.send_message(list(ADMIN_IDS)[0], caption)
                 elif media_type == "audio":
-                    await bot.send_audio(YOUR_USER_ID, file_id, caption=caption)
+                    await bot.send_audio(list(ADMIN_IDS)[0], file_id, caption=caption)
                 else:
                     await bot.send_message(
-                        YOUR_USER_ID,
+                        list(ADMIN_IDS)[0],
                         f"""🗑 Сообщение удалено
 
 👤 От: {user_name or 'Неизвестно'}
@@ -204,7 +212,7 @@ async def handle_deleted(deleted: types.BusinessMessagesDeleted):
 
             else:
                 await bot.send_message(
-                    YOUR_USER_ID,
+                    list(ADMIN_IDS)[0],
                     f"""🗑 Сообщение удалено
 
 👤 От: {user_name or 'Неизвестно'}
@@ -223,11 +231,14 @@ async def handle_edited(message: types.Message):
     if not message.from_user or not is_active:
         return
 
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
     old_user, old_content, _, _ = get_message(message.chat.id, message.message_id)
     new_content = message.text or message.caption or "[media]"
 
     await bot.send_message(
-        YOUR_USER_ID,
+        list(ADMIN_IDS)[0],
         f"""✏️ Сообщение изменено
 
 👤 {message.from_user.full_name}
@@ -239,7 +250,7 @@ async def handle_edited(message: types.Message):
 
     save_message(message)
 
-# ====================== CLEANUP TASK ======================
+# ====================== TASK ======================
 
 async def cleanup_task():
     while True:
@@ -250,11 +261,9 @@ async def cleanup_task():
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-
-    print("🚀 Bot started")
+    print("🚀 Bot started with 2 admins")
 
     asyncio.create_task(cleanup_task())
-
     await dp.start_polling(bot)
 
 # ====================== RUN ======================
