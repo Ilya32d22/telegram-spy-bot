@@ -16,38 +16,33 @@ YOUR_USER_ID = int(os.getenv("YOUR_USER_ID"))
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
+migrate_database()
 
 # ====================== БАЗА ДАННЫХ + МИГРАЦИЯ ======================
 conn = sqlite3.connect('spy_bot.db', check_same_thread=False)
 
 # Миграция таблицы (добавляем недостающие колонки)
 def migrate_database():
-    # Проверяем существующие колонки
-    columns = [col[1] for col in conn.execute("PRAGMA table_info(messages)").fetchall()]
-    
-    if 'media_type' not in columns:
-        print("🔄 Выполняется миграция базы данных...")
-        conn.execute("ALTER TABLE messages ADD COLUMN media_type TEXT")
-        conn.execute("ALTER TABLE messages ADD COLUMN file_id TEXT")
-        print("✅ Миграция завершена")
-    
+    conn = sqlite3.connect("spy_bot.db")
+    cursor = conn.cursor()
+
+    print("🔄 Проверка базы...")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS messages (
+        chat_id INTEGER,
+        message_id INTEGER,
+        user_name TEXT,
+        content TEXT,
+        media_type TEXT,
+        file_id TEXT,
+        time TEXT,
+        PRIMARY KEY(chat_id, message_id)
+    )
+    """)
+
     conn.commit()
-
-migrate_database()
-
-conn.execute('''CREATE TABLE IF NOT EXISTS messages (
-                chat_id INTEGER,
-                message_id INTEGER,
-                user_name TEXT,
-                content TEXT,
-                media_type TEXT,
-                file_id TEXT,
-                time TEXT,
-                PRIMARY KEY(chat_id, message_id)
-              )''')
-
-is_active = True
-blacklist = set()
+    conn.close()
 
 def cleanup_old_messages():
     seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
