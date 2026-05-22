@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -17,22 +17,15 @@ load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 USER_ID_RAW = os.getenv("YOUR_USER_ID")
 
-if not TOKEN:
-    raise ValueError("BOT_TOKEN не найден")
-
-if not USER_ID_RAW:
-    raise ValueError("YOUR_USER_ID не найден")
+if not TOKEN or not USER_ID_RAW:
+    raise ValueError("ENV missing")
 
 # ====================== ADMINS ======================
 
-ADMIN_IDS = {
-    int(USER_ID_RAW),
-    6532490493,
-    199862821
-}
+ADMIN_IDS = {int(USER_ID_RAW)}
 
-def is_admin(user_id: int):
-    return user_id in ADMIN_IDS
+def is_admin(uid: int):
+    return uid in ADMIN_IDS
 
 # ====================== BOT ======================
 
@@ -43,9 +36,8 @@ dp = Dispatcher()
 
 conn = sqlite3.connect("spy_bot.db", check_same_thread=False)
 
-def migrate_database():
+def migrate():
     cur = conn.cursor()
-    print("🔄 Проверка базы...")
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS messages (
@@ -60,46 +52,59 @@ def migrate_database():
     )
     """)
 
+    # 👇 кто владелец чата
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS chats (
+        chat_id INTEGER PRIMARY KEY,
+        owner_id INTEGER
+    )
+    """)
+
+    # 👇 активное зеркало админа
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS mirrors (
+        admin_id INTEGER PRIMARY KEY
+    )
+    """)
+
     conn.commit()
 
-migrate_database()
+migrate()
 
-# ====================== STATE ======================
+# ====================== MIRROR SYSTEM ======================
 
-is_active = True
+def get_mirror_admin():
+    row = conn.execute("SELECT admin_id FROM mirrors LIMIT 1").fetchone()
+    return row[0] if row else None
 
-# ====================== CLEANUP ======================
 
-def cleanup_old_messages():
-    try:
-        seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-        conn.execute("DELETE FROM messages WHERE time < ?", (seven_days_ago,))
-        conn.commit()
-    except Exception as e:
-        logging.error(f"Cleanup error: {e}")
+def set_mirror_admin(admin_id: int):
+    conn.execute("INSERT OR REPLACE INTO mirrors VALUES (?)", (admin_id,))
+    conn.commit()
 
-# ====================== SAVE ======================
+
+def get_owner(chat_id: int):
+    row = conn.execute(
+        "SELECT owner_id FROM chats WHERE chat_id=?",
+        (chat_id,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+def set_owner(chat_id: int, owner_id: int):
+    conn.execute("""
+        INSERT OR REPLACE INTO chats(chat_id, owner_id)
+        VALUES (?, ?)
+    """, (chat_id, owner_id))
+    conn.commit()
+
+# ====================== SAVE MESSAGE ======================
 
 def save_message(message: types.Message):
     if not message.from_user:
         return
 
-    if message.text:
-        content = message.text
-    elif message.caption:
-        content = message.caption
-    elif message.photo:
-        content = f"📷 Фото | {message.caption or ''}"
-    elif message.video:
-        content = f"🎥 Видео | {message.caption or ''}"
-    elif message.document:
-        content = f"📄 Файл | {message.document.file_name or ''}"
-    elif message.voice:
-        content = "🎤 Голосовое"
-    elif message.audio:
-        content = "🎵 Аудио"
-    else:
-        content = "[Медиа]"
+    content = message.text or message.caption or "[media]"
 
     media_type = None
     file_id = None
@@ -113,18 +118,9 @@ def save_message(message: types.Message):
     elif message.document:
         media_type = "document"
         file_id = message.document.file_id
-    elif message.voice:
-        media_type = "voice"
-        file_id = message.voice.file_id
-    elif message.audio:
-        media_type = "audio"
-        file_id = message.audio.file_id
-
-    time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     conn.execute("""
         INSERT OR REPLACE INTO messages
-        (chat_id, message_id, user_name, content, media_type, file_id, time)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
         message.chat.id,
@@ -133,21 +129,17 @@ def save_message(message: types.Message):
         content,
         media_type,
         file_id,
-        time_str
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ))
-
     conn.commit()
 
-# ====================== GET ======================
 
-def get_message(chat_id, message_id):
-    row = conn.execute("""
+def get_message(chat_id, msg_id):
+    return conn.execute("""
         SELECT user_name, content, media_type, file_id
         FROM messages
-        WHERE chat_id = ? AND message_id = ?
-    """, (chat_id, message_id)).fetchone()
-
-    return row if row else (None, None, None, None)
+        WHERE chat_id=? AND message_id=?
+    """, (chat_id, msg_id)).fetchone()
 
 # ====================== ADMIN COMMANDS ======================
 
@@ -156,158 +148,103 @@ async def start(message: types.Message):
     if not is_admin(message.from_user.id):
         return
 
-    await message.answer("🕵️‍♂️ Spy Bot запущен (multi-admin)")
+    await message.answer("🪞 Mirror bot active")
+
+@dp.message(Command("mirror"))
+async def mirror(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    set_mirror_admin(message.from_user.id)
+    await message.answer("🪞 Теперь это твоё зеркало (новые чаты будут твои)")
 
 @dp.message(Command("addadmin"))
-async def add_admin(message: types.Message):
+async def addadmin(message: types.Message):
     if not is_admin(message.from_user.id):
         return
 
-    args = message.text.split()
-
-    if len(args) != 2:
-        await message.answer("Использование: /addadmin ID")
-        return
-
     try:
-        new_admin = int(args[1])
-        ADMIN_IDS.add(new_admin)
-        await message.answer(f"✅ Админ добавлен: {new_admin}")
-    except ValueError:
-        await message.answer("❌ Неверный ID")
+        uid = int(message.text.split()[1])
+        ADMIN_IDS.add(uid)
+        await message.answer(f"✅ admin added: {uid}")
+    except:
+        await message.answer("usage: /addadmin ID")
 
 @dp.message(Command("removeadmin"))
-async def remove_admin(message: types.Message):
+async def removeadmin(message: types.Message):
     if not is_admin(message.from_user.id):
         return
 
-    args = message.text.split()
-
-    if len(args) != 2:
-        await message.answer("Использование: /removeadmin ID")
-        return
-
     try:
-        admin_id = int(args[1])
+        uid = int(message.text.split()[1])
 
-        if admin_id == int(USER_ID_RAW):
-            await message.answer("❌ Нельзя удалить главного админа")
-            return
+        if uid == int(USER_ID_RAW):
+            return await message.answer("❌ main admin protected")
 
-        if admin_id in ADMIN_IDS:
-            ADMIN_IDS.remove(admin_id)
-            await message.answer(f"🗑 Админ удалён: {admin_id}")
-        else:
-            await message.answer("⚠️ Такой админ не найден")
+        ADMIN_IDS.discard(uid)
+        await message.answer(f"🗑 removed: {uid}")
+    except:
+        await message.answer("usage: /removeadmin ID")
 
-    except ValueError:
-        await message.answer("❌ Неверный ID")
-
-# ====================== HANDLERS ======================
+# ====================== CORE HANDLER ======================
 
 @dp.business_message()
-async def handle_new_message(message: types.Message):
+async def handle(message: types.Message):
     if not message.from_user:
         return
 
     save_message(message)
 
+    owner = get_owner(message.chat.id)
+
+    # 🔥 AUTO MIRROR LOGIC
+    if owner is None:
+        mirror_admin = get_mirror_admin()
+
+        if mirror_admin is None:
+            mirror_admin = list(ADMIN_IDS)[0]
+            set_mirror_admin(mirror_admin)
+
+        set_owner(message.chat.id, mirror_admin)
+        owner = mirror_admin
+
+    await bot.send_message(
+        owner,
+        f"💬 New message\n"
+        f"👤 {message.from_user.full_name}\n"
+        f"📩 {message.text or message.caption or '[media]'}"
+    )
+
+# ====================== DELETED ======================
+
 @dp.deleted_business_messages()
-async def handle_deleted(deleted: types.BusinessMessagesDeleted):
-    if not is_active:
+async def deleted(message: types.BusinessMessagesDeleted):
+
+    owner = get_owner(message.chat.id)
+    if not owner:
         return
 
-    user_name, content, media_type, file_id = None, None, None, None
+    for msg_id in message.message_ids:
+        user, content, _, _ = get_message(message.chat.id, msg_id)
 
-    for msg_id in deleted.message_ids:
-        user_name, content, media_type, file_id = get_message(deleted.chat.id, msg_id)
-
-        for admin_id in ADMIN_IDS:
-            try:
-                if media_type and file_id:
-                    caption = f"🗑 Сообщение удалено\nОт: {user_name or 'unknown'}"
-
-                    if media_type == "photo":
-                        await bot.send_photo(admin_id, file_id, caption=caption)
-                    elif media_type == "video":
-                        await bot.send_video(admin_id, file_id, caption=caption)
-                    elif media_type == "document":
-                        await bot.send_document(admin_id, file_id, caption=caption)
-                    elif media_type == "voice":
-                        await bot.send_voice(admin_id, file_id)
-                        await bot.send_message(admin_id, caption)
-                    elif media_type == "audio":
-                        await bot.send_audio(admin_id, file_id, caption=caption)
-                    else:
-                        await bot.send_message(
-                            admin_id,
-                            f"""🗑 Сообщение удалено
-
-👤 От: {user_name or 'Неизвестно'}
-💬 Чат: {deleted.chat.id}
-🆔 ID: {msg_id}
-⏰ {datetime.now().strftime("%d.%m %H:%M:%S")}
-
-❌ Было: {content or 'Пустое сообщение'}"""
-                        )
-
-                else:
-                    await bot.send_message(
-                        admin_id,
-                        f"""🗑 Сообщение удалено
-
-👤 От: {user_name or 'Неизвестно'}
-💬 Чат: {deleted.chat.id}
-🆔 ID: {msg_id}
-⏰ {datetime.now().strftime("%d.%m %H:%M:%S")}
-
-❌ Было: {content or 'Пустое сообщение'}"""
-                    )
-
-            except Exception as e:
-                logging.error(e)
-
-# ====================== EDIT ======================
-
-@dp.edited_business_message()
-async def handle_edited(message: types.Message):
-    if not message.from_user or not is_active:
-        return
-
-    old_user, old_content, _, _ = get_message(message.chat.id, message.message_id)
-    new_content = message.text or message.caption or "[media]"
-
-    for admin_id in ADMIN_IDS:
         await bot.send_message(
-            admin_id,
-            f"""✏️ Сообщение изменено
+            owner,
+            f"""🗑 Deleted
 
-👤 {message.from_user.full_name}
+👤 {user}
 💬 {message.chat.id}
+🆔 {msg_id}
 
-Было: {old_content}
-Стало: {new_content}"""
+❌ {content}
+"""
         )
 
-    save_message(message)
-
-# ====================== CLEANUP ======================
-
-async def cleanup_task():
-    while True:
-        await asyncio.sleep(6 * 3600)
-        cleanup_old_messages()
-
-# ====================== MAIN ======================
+# ====================== RUN ======================
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-    print("🚀 Bot started (multi-admin fixed)")
-
-    asyncio.create_task(cleanup_task())
+    print("🚀 MIRROR SYSTEM STARTED")
     await dp.start_polling(bot)
-
-# ====================== RUN ======================
 
 if __name__ == "__main__":
     asyncio.run(main())
