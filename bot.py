@@ -142,7 +142,7 @@ async def start(message: types.Message):
     if message.from_user.id != YOUR_USER_ID:
         return
 
-    await message.answer("🕵️‍♂️ Spy Bot запущен")
+    await message.answer("🕵️‍♂️ Spy Bot запущен и готов к работе!")
 
 @dp.message(Command("cleanup"))
 async def cleanup_cmd(message: types.Message):
