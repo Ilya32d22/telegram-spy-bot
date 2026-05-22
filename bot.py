@@ -184,10 +184,32 @@ async def handle_deleted(deleted: types.BusinessMessagesDeleted):
                     await bot.send_message(YOUR_USER_ID, caption)
                 elif media_type == "audio":
                     await bot.send_audio(YOUR_USER_ID, file_id, caption=caption)
+
                 else:
-                    await bot.send_message(YOUR_USER_ID, content or "deleted message")
+                    text = f"""🗑 Сообщение удалено
+
+👤 От: {user_name or 'Неизвестно'}
+💬 Чат: {deleted.chat.id}
+🆔 ID: {msg_id}
+⏰ {datetime.now().strftime("%d.%m %H:%M:%S")}
+
+❌ Было: {content or 'Пустое сообщение'}
+"""
+
+                    await bot.send_message(YOUR_USER_ID, text.strip())
+
             else:
-                await bot.send_message(YOUR_USER_ID, f"🗑 {content}")
+                text = f"""🗑 Сообщение удалено
+
+👤 От: {user_name or 'Неизвестно'}
+💬 Чат: {deleted.chat.id}
+🆔 ID: {msg_id}
+⏰ {datetime.now().strftime("%d.%m %H:%M:%S")}
+
+❌ Было: {content or 'Пустое сообщение'}
+"""
+
+                await bot.send_message(YOUR_USER_ID, text.strip())
 
         except Exception as e:
             logging.error(e)
