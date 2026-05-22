@@ -18,10 +18,10 @@ TOKEN = os.getenv("BOT_TOKEN")
 USER_ID_RAW = os.getenv("YOUR_USER_ID")
 
 if not TOKEN:
-    raise ValueError("BOT_TOKEN не найден в environment variables")
+    raise ValueError("BOT_TOKEN не найден")
 
 if not USER_ID_RAW:
-    raise ValueError("YOUR_USER_ID не найден в environment variables")
+    raise ValueError("YOUR_USER_ID не найден")
 
 # ====================== ADMINS ======================
 
@@ -30,6 +30,9 @@ ADMIN_IDS = {
     6532490493,
     199862821
 }
+
+def is_admin(user_id: int):
+    return user_id in ADMIN_IDS
 
 # ====================== BOT ======================
 
@@ -146,25 +149,59 @@ def get_message(chat_id, message_id):
 
     return row if row else (None, None, None, None)
 
-# ====================== COMMANDS ======================
-
-def is_admin(user_id: int):
-    return user_id in ADMIN_IDS
+# ====================== ADMIN COMMANDS ======================
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
+    if not is_admin(message.from_user.id):
         return
 
-    await message.answer("🕵️‍♂️ Spy Bot запущен (2 админа активны)")
+    await message.answer("🕵️‍♂️ Spy Bot запущен (multi-admin)")
 
-@dp.message(Command("cleanup"))
-async def cleanup_cmd(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
+@dp.message(Command("addadmin"))
+async def add_admin(message: types.Message):
+    if not is_admin(message.from_user.id):
         return
 
-    cleanup_old_messages()
-    await message.answer("✅ Очистка выполнена")
+    args = message.text.split()
+
+    if len(args) != 2:
+        await message.answer("Использование: /addadmin ID")
+        return
+
+    try:
+        new_admin = int(args[1])
+        ADMIN_IDS.add(new_admin)
+        await message.answer(f"✅ Админ добавлен: {new_admin}")
+    except ValueError:
+        await message.answer("❌ Неверный ID")
+
+@dp.message(Command("removeadmin"))
+async def remove_admin(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    args = message.text.split()
+
+    if len(args) != 2:
+        await message.answer("Использование: /removeadmin ID")
+        return
+
+    try:
+        admin_id = int(args[1])
+
+        if admin_id == int(USER_ID_RAW):
+            await message.answer("❌ Нельзя удалить главного админа")
+            return
+
+        if admin_id in ADMIN_IDS:
+            ADMIN_IDS.remove(admin_id)
+            await message.answer(f"🗑 Админ удалён: {admin_id}")
+        else:
+            await message.answer("⚠️ Такой админ не найден")
+
+    except ValueError:
+        await message.answer("❌ Неверный ID")
 
 # ====================== HANDLERS ======================
 
@@ -180,27 +217,43 @@ async def handle_deleted(deleted: types.BusinessMessagesDeleted):
     if not is_active:
         return
 
+    user_name, content, media_type, file_id = None, None, None, None
+
     for msg_id in deleted.message_ids:
         user_name, content, media_type, file_id = get_message(deleted.chat.id, msg_id)
 
-        try:
-            if media_type and file_id:
-                caption = f"🗑 Сообщение удалено\nОт: {user_name or 'unknown'}"
+        for admin_id in ADMIN_IDS:
+            try:
+                if media_type and file_id:
+                    caption = f"🗑 Сообщение удалено\nОт: {user_name or 'unknown'}"
 
-                if media_type == "photo":
-                    await bot.send_photo(list(ADMIN_IDS)[0], file_id, caption=caption)
-                elif media_type == "video":
-                    await bot.send_video(list(ADMIN_IDS)[0], file_id, caption=caption)
-                elif media_type == "document":
-                    await bot.send_document(list(ADMIN_IDS)[0], file_id, caption=caption)
-                elif media_type == "voice":
-                    await bot.send_voice(list(ADMIN_IDS)[0], file_id)
-                    await bot.send_message(list(ADMIN_IDS)[0], caption)
-                elif media_type == "audio":
-                    await bot.send_audio(list(ADMIN_IDS)[0], file_id, caption=caption)
+                    if media_type == "photo":
+                        await bot.send_photo(admin_id, file_id, caption=caption)
+                    elif media_type == "video":
+                        await bot.send_video(admin_id, file_id, caption=caption)
+                    elif media_type == "document":
+                        await bot.send_document(admin_id, file_id, caption=caption)
+                    elif media_type == "voice":
+                        await bot.send_voice(admin_id, file_id)
+                        await bot.send_message(admin_id, caption)
+                    elif media_type == "audio":
+                        await bot.send_audio(admin_id, file_id, caption=caption)
+                    else:
+                        await bot.send_message(
+                            admin_id,
+                            f"""🗑 Сообщение удалено
+
+👤 От: {user_name or 'Неизвестно'}
+💬 Чат: {deleted.chat.id}
+🆔 ID: {msg_id}
+⏰ {datetime.now().strftime("%d.%m %H:%M:%S")}
+
+❌ Было: {content or 'Пустое сообщение'}"""
+                        )
+
                 else:
                     await bot.send_message(
-                        list(ADMIN_IDS)[0],
+                        admin_id,
                         f"""🗑 Сообщение удалено
 
 👤 От: {user_name or 'Неизвестно'}
@@ -211,47 +264,34 @@ async def handle_deleted(deleted: types.BusinessMessagesDeleted):
 ❌ Было: {content or 'Пустое сообщение'}"""
                     )
 
-            else:
-                await bot.send_message(
-                    list(ADMIN_IDS)[0],
-                    f"""🗑 Сообщение удалено
+            except Exception as e:
+                logging.error(e)
 
-👤 От: {user_name or 'Неизвестно'}
-💬 Чат: {deleted.chat.id}
-🆔 ID: {msg_id}
-⏰ {datetime.now().strftime("%d.%m %H:%M:%S")}
-
-❌ Было: {content or 'Пустое сообщение'}"""
-                )
-
-        except Exception as e:
-            logging.error(e)
+# ====================== EDIT ======================
 
 @dp.edited_business_message()
 async def handle_edited(message: types.Message):
     if not message.from_user or not is_active:
         return
 
-    if message.from_user.id not in ADMIN_IDS:
-        return
-
     old_user, old_content, _, _ = get_message(message.chat.id, message.message_id)
     new_content = message.text or message.caption or "[media]"
 
-    await bot.send_message(
-        list(ADMIN_IDS)[0],
-        f"""✏️ Сообщение изменено
+    for admin_id in ADMIN_IDS:
+        await bot.send_message(
+            admin_id,
+            f"""✏️ Сообщение изменено
 
 👤 {message.from_user.full_name}
 💬 {message.chat.id}
 
 Было: {old_content}
 Стало: {new_content}"""
-    )
+        )
 
     save_message(message)
 
-# ====================== TASK ======================
+# ====================== CLEANUP ======================
 
 async def cleanup_task():
     while True:
@@ -262,7 +302,7 @@ async def cleanup_task():
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-    print("🚀 Bot started with 2 admins")
+    print("🚀 Bot started (multi-admin fixed)")
 
     asyncio.create_task(cleanup_task())
     await dp.start_polling(bot)
