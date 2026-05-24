@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import sqlite3
+import os
+import threading
 from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, types
@@ -8,7 +10,8 @@ from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from dotenv import load_dotenv
-import os
+from fastapi import FastAPI
+import uvicorn
 
 load_dotenv()
 
@@ -29,6 +32,18 @@ YOUR_USER_ID = int(USER_ID_RAW)
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
+
+# ====================== FASTAPI ======================
+
+app = FastAPI()
+
+@app.get("/")
+async def root():
+    return {"status": "ok"}
+
+@app.get("/health")
+async def health():
+    return {"alive": True}
 
 # ====================== DB ======================
 
@@ -246,12 +261,29 @@ async def cleanup_task():
         await asyncio.sleep(6 * 3600)
         cleanup_old_messages()
 
+# ====================== WEB SERVER ======================
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        log_level="warning"
+    )
+
 # ====================== MAIN ======================
 
 async def main():
     logging.basicConfig(level=logging.INFO)
 
     print("🚀 Bot started")
+
+    threading.Thread(
+        target=run_web,
+        daemon=True
+    ).start()
 
     asyncio.create_task(cleanup_task())
 
